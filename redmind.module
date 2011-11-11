@@ -1,0 +1,149 @@
+<?php
+
+/**
+ * @file
+ * This is the file description for Redmind module.
+ *
+ * In this more verbose, multi-line description, you can specify what this
+ * file does exactly. Make sure to wrap your documentation in column 78 so
+ * that the file can be displayed nicely in default-sized consoles.
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function redmind_menu() {
+  $items['node/%node/%ctools_js/graphtrack'] = array(
+    'title' => 'Graph track',
+    'description' => 'The description of the menu item. It is used as title attribute and on the administration overview page.',
+    'page callback' => 'redmind_graphtrack',
+    'page arguments' => array(1, 2),
+    'access arguments' => array('view post access counter'),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_theme().
+ */
+function redmind_theme($existing, $type, $theme, $path) {
+  return array(
+    'redmind_graphtrack' => array(
+      'arguments' => array('node' => NULL, 'statistics' => NULL),
+    ),
+  );
+}
+
+/**
+ * Implements hook_link_alter().
+ */
+function redmind_link_alter(&$links, $node) {
+  $statistics = statistics_get($node->nid);
+  if (isset($links['statistics_counter'])) {
+    ctools_include('modal');
+    ctools_modal_add_js();
+
+    $links['statistics_counter'] = array(
+      'title' => format_plural($statistics['daycount'], '1 read', '@count reads') . ', ' . format_plural($statistics['totalcount'], 'total 1 read', 'total @count reads'),
+      'href' => 'node/' . $node->nid . '/nojs/graphtrack',
+      'attributes' => array('class' => 'ctools-use-modal'),
+    );
+  }
+}
+
+function redmind_graphtrack($node, $js = FALSE) {
+  $title      = t('Статистика просмотров объявления');
+  $statistics = statistics_get($node->nid);
+  $results    = db_query('SELECT count(aid) as count,  MIN(timestamp) as day FROM {accesslog} WHERE path = "%s" GROUP BY DATE(FROM_UNIXTIME(timestamp))', 'node/' . $node->nid);
+  while ($result = db_fetch_array($results)) {
+    $day_count[date('d.m', $result['day'])] = $result['count'];
+  }
+  $statistics['day_count'] = $day_count;
+  $output = theme('redmind_graphtrack', $node, $statistics);
+
+  if ($js) {
+    ctools_include('ajax');
+    ctools_include('modal');
+    ctools_modal_render($title, $output);
+  }
+  else {
+    drupal_set_title($title);
+    return $output;
+  }
+}
+
+function theme_redmind_graphtrack($node, $statistics) {
+  $output = '<h1 class="satistics">' . $node->title . '</h1>';
+  $output .= '<p class="satistics">' . t('С момента подачи !post объявление просмотрели !totalcount раз, из них !daycount раз сегодня.', array('!post' => format_date($node->created), '!totalcount' => $statistics['totalcount'], '!daycount' => $statistics['daycount'])) . '<br />' . t('На графике отображается динамика просмотров за период с !dayspast октября по !day', array('!dayspast' => format_interval(time() - $node->created, 2), '!day' => format_date(time()))) . '</p>';
+  $cid = 'chart_container_' . $node->nid;
+  $output .= '<div id="' . $cid . '"></div>';
+
+  foreach ($statistics['day_count'] as $day => $count) {
+    $categories[] = $day;
+    $series[] = (int) $count;
+  }
+  $options = array(
+    'chart' => array(
+      'renderTo' => $cid,
+      'defaultSeriesType' => 'column',
+    ),
+    'title' => '',
+    'xAxis' => array(
+      'categories' => $categories,
+    ),
+    'yAxis' => array('title' => array('text' => '')),
+    'legend' => array('enabled' => FALSE),
+    'series' => array(
+      array(
+        'data' => $series,
+        'name' => t('reads'),
+      ),
+    ),
+  );
+
+  drupal_add_js(libraries_get_path('highcharts') . '/js/highcharts.js');
+  drupal_add_js(array('charts' => array($cid => $options)), 'setting');
+  drupal_add_js(drupal_get_path('module', 'redmind') . '/redmind.js');
+
+  return $output;
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function redmind_form_alter(&$form, &$form_state, $form_id) {
+  if (strstr($form_id, '_node_form')) {
+    foreach (element_children($form) as $field) {
+      if ($form[$field]['#type'] == 'optionwidgets_select') {
+        $form[$field]['#pre_render'] = array('redmind_select_alter');
+      }
+      else {
+        foreach (element_children($form[$field]) as $subfield) {
+          if ($form[$field][$subfield]['#type'] == 'hierarchical_select') {
+            $form[$field][$subfield]['#pre_render'] = array('redmind_select_alter');
+          }
+        }
+      }
+    }
+  }
+}
+
+function redmind_select_alter($elements) {
+  if ($elements['#type'] == 'hierarchical_select') {
+    $elements['hierarchical_select']['selects'][0]['#options']['none'] = $elements['#title'];
+    unset($elements['#title']);
+  }
+  else {
+    $str = reset($elements['value']['#options']);
+    foreach ($elements['value']['#options'] as $key => $value) {
+      if ($value == $str) {
+        $elements['value']['#options'][$key] = $elements['#title'];
+      }
+    }
+    unset($elements['value']['#title']);
+  }
+  return $elements;
+}
+
